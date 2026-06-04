@@ -1,0 +1,18 @@
+# APIキー・シークレットは絶対にGitHubに上げない
+.streamlit/secrets.toml
+
+# キャッシュ
+__pycache__/
+*.py[cod]
+.site_analyzer_cache/
+
+# テスト出力
+test_*.md
+tmp_*.txt
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# 起動バッチ（APIキーが含まれる）
+起動.bat

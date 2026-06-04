@@ -1,0 +1,171 @@
+"""
+敷地法規調査ツール - Streamlit Web UI
+起動: python -m streamlit run app.py
+"""
+
+import os
+import sys
+from pathlib import Path
+
+import streamlit as st
+
+# Streamlit Cloud の Secrets を環境変数に反映（ローカル実行時はスキップ）
+for _key in ("REINFOLIB_API_KEY", "GOOGLE_API_KEY"):
+    if _key not in os.environ and _key in st.secrets:
+        os.environ[_key] = st.secrets[_key]
+
+# analyze_site.py と同じフォルダにある関数をインポート
+sys.path.insert(0, str(Path(__file__).parent))
+from analyze_site import build_report, geocode, research
+
+# ─────────────────────────────────────────────
+# ページ設定
+# ─────────────────────────────────────────────
+st.set_page_config(
+    page_title="敷地法規調査ツール",
+    page_icon="🏢",
+    layout="wide",
+)
+
+st.title("🏢 敷地法規調査ツール")
+st.caption("住所を入力するだけで、都市計画情報・建築基準法の主要制限をまとめたレポートを自動生成します。")
+
+# ─────────────────────────────────────────────
+# 入力フォーム
+# ─────────────────────────────────────────────
+with st.form("search_form"):
+    address = st.text_input(
+        "調査したい住所を入力してください",
+        placeholder="例）東京都目黒区目黒2-1-1　または　〒292-0007 千葉県木更津市中島2627-1",
+        help="番地まで入力するほど精度が上がります。郵便番号は無視されます。",
+    )
+    submitted = st.form_submit_button("🔍 調査開始", use_container_width=True, type="primary")
+
+# ─────────────────────────────────────────────
+# 実行・結果表示
+# ─────────────────────────────────────────────
+if submitted and address.strip():
+    # 郵便番号部分（〒xxx-xxxx）を除去
+    import re
+    clean_address = re.sub(r"[〒\s]*\d{3}-\d{4}\s*", "", address).strip()
+
+    st.divider()
+
+    # ステータス表示（処理中）
+    status = st.status("調査中です。しばらくお待ちください...", expanded=True)
+
+    try:
+        with status:
+            # Step 1: ジオコーディング
+            st.write("📍 住所を座標に変換中...")
+            geo = geocode(clean_address)
+            st.write(f"　緯度 {geo['lat']:.6f} / 経度 {geo['lon']:.6f}　（市区町村コード: {geo['muniCode'] or '未取得'}）")
+
+            # Step 2-3: 都市計画情報の調査
+            st.write("🗺️ 国土数値情報（用途地域・容積率・建ぺい率）を照合中...")
+            st.write("🔎 Web検索で防火規制等を補完中...")
+            zone_info, search_results, gemini_raw = research(clean_address, geo["normalized"], geo)
+
+            # Step 4: レポート生成
+            st.write("📄 レポートを生成中...")
+            report_md = build_report(clean_address, geo, zone_info, search_results, gemini_raw)
+
+        status.update(label="✅ 調査完了！", state="complete", expanded=False)
+
+        # ─────────────────────────────────────────────
+        # 取得サマリー（一番目立つ場所に表示）
+        # ─────────────────────────────────────────────
+        st.subheader("📊 取得結果サマリー")
+
+        na = "⚠️ 要確認"
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            v = zone_info.get("用途地域", na)
+            color = "normal" if zone_info.get("用途地域") else "off"
+            st.metric("用途地域", v)
+        with col2:
+            v = zone_info.get("容積率", na)
+            st.metric("指定容積率", v)
+        with col3:
+            v = zone_info.get("建蔽率", na)
+            st.metric("指定建ぺい率", v)
+        with col4:
+            v = zone_info.get("防火規制", na)
+            st.metric("防火規制", v)
+
+        st.divider()
+
+        # ─────────────────────────────────────────────
+        # レポート本文（Markdown 表示）
+        # ─────────────────────────────────────────────
+        st.subheader("📋 詳細レポート")
+        st.markdown(report_md)
+
+        st.divider()
+
+        # ─────────────────────────────────────────────
+        # ダウンロードボタン
+        # ─────────────────────────────────────────────
+        safe_name = re.sub(r'[\\/:*?"<>|]', '_', clean_address)
+        st.download_button(
+            label="📥 レポートをダウンロード（Markdown）",
+            data=report_md.encode("utf-8"),
+            file_name=f"敷地調査_{safe_name}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+
+        # ─────────────────────────────────────────────
+        # 注意書き
+        # ─────────────────────────────────────────────
+        st.info(
+            "**免責事項**: このレポートは国土数値情報・Web自動収集による参考情報です。"
+            "確認申請・設計判断に使用する際は必ず所管行政庁の窓口で最新情報を確認してください。",
+            icon="ℹ️",
+        )
+
+    except ValueError as e:
+        status.update(label="❌ エラー", state="error")
+        st.error(f"住所が見つかりませんでした: {e}\n\n番地まで含めた正確な住所を入力してください。")
+    except Exception as e:
+        status.update(label="❌ エラー", state="error")
+        st.error(f"調査中にエラーが発生しました: {e}")
+
+elif submitted:
+    st.warning("住所を入力してください。")
+
+# ─────────────────────────────────────────────
+# サイドバー（使い方）
+# ─────────────────────────────────────────────
+with st.sidebar:
+    st.header("📖 使い方")
+    st.markdown("""
+1. 調査したい敷地の住所を入力
+2. **調査開始** ボタンを押す
+3. 30秒〜1分程度で結果が表示されます
+4. 必要に応じてレポートをダウンロード
+
+---
+
+**取得できる情報**
+- 用途地域
+- 指定容積率・建ぺい率
+- 防火規制（防火・準防火地域）
+- 斜線制限・日影規制の適用有無
+- 確認申請前チェックリスト
+- 窓口確認が必要な条例一覧
+
+---
+
+**⚠️ 注意事項**
+- 用途地域・容積率・建ぺい率は **国土数値情報（国土交通省）** から取得した公式データです
+- 防火規制・高度地区・条例は Web 検索からの補完情報のため、必ず行政窓口で確認してください
+""")
+
+    st.header("🔑 精度向上（任意）")
+    st.markdown("""
+`GOOGLE_API_KEY` を設定すると、防火規制・高度地区の
+取得精度が向上します。
+
+[Google AI Studio でキー取得](https://aistudio.google.com/apikey)
+""")
