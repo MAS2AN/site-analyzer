@@ -395,11 +395,34 @@ def research_reinfolib(lat: float, lon: float, api_key: str) -> dict:
                 result["防火規制"] = fire
                 print(f"         [reinfolib] 防火規制: {fire}", file=sys.stderr)
         else:
-            # XKT014に該当なし = 防火・準防火ではない → 法22条区域の可能性をフラグで通知
             result["_xkt014_empty"] = True
             print("         [reinfolib] XKT014: 防火・準防火地域の指定なし", file=sys.stderr)
     except Exception as e:
         print(f"         ⚠️ reinfolib XKT014 失敗: {e}", file=sys.stderr)
+
+    # XKT023: 地区計画
+    try:
+        feats = _reinfolib_tile("XKT023", lat, lon, api_key)
+        if feats:
+            props = feats[0]
+            # 属性名はAPIによって異なるため、文字列値を動的に探す
+            name = (
+                props.get("district_plan_name_ja")
+                or props.get("district_plan_name")
+                or props.get("name_ja")
+                or props.get("name")
+                or next(
+                    (v for v in props.values() if isinstance(v, str) and len(v) > 2),
+                    "指定あり（名称取得不可）",
+                )
+            )
+            result["地区計画"] = str(name)
+            print(f"         [reinfolib] 地区計画: {name}", file=sys.stderr)
+        else:
+            result["地区計画"] = "なし"
+            print("         [reinfolib] XKT023: 地区計画の指定なし", file=sys.stderr)
+    except Exception as e:
+        print(f"         ⚠️ reinfolib XKT023 失敗: {e}", file=sys.stderr)
 
     return result
 
@@ -923,9 +946,9 @@ def build_report(address: str, geo: dict, zone_info: dict, search_results: list,
 | 防火規制 | {fire or na} | {_st('防火規制', fire)} |
 | 高度地区 | {height or na} | {_st('高度地区', height)} |
 | 日影規制（数値） | {na} | ✕ |
-| 地区計画 | {na} | ✕ |
+| 地区計画 | {zone_info.get('地区計画', na)} | {_st('地区計画', zone_info.get('地区計画'))} |
 
-> **凡例** ✅ = 国土数値情報（公式）　⚠️ = Web参考（要確認）　✕ = 未取得 → **⚠️・✕ は必ず行政窓口 / 都市計画GISで確認してください**
+> **凡例** ✅ = 一次情報（国土数値情報・reinfolib公式）　⚠️ = Web参考（要確認）　✕ = 未取得 → **⚠️・✕ は必ず行政窓口 / 都市計画GISで確認してください**
 
 ---
 
