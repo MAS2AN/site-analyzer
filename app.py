@@ -23,11 +23,127 @@ from analyze_site import build_report, geocode, research
 # ─────────────────────────────────────────────
 st.set_page_config(
     page_title="敷地法規調査ツール",
-    page_icon="🏢",
+    page_icon="🌿",
     layout="wide",
 )
 
-st.title("🏢 敷地法規調査ツール")
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap');
+
+/* ── ベース ── */
+html, body, .stApp {
+    background-color: #F5F2EB !important;
+    font-family: 'Noto Sans JP', sans-serif !important;
+    color: #2C3E35 !important;
+}
+
+/* ── サイドバー ── */
+section[data-testid="stSidebar"] {
+    background-color: #EAE6DC !important;
+    border-right: 1px solid #D4CFC4 !important;
+}
+section[data-testid="stSidebar"] h2 {
+    color: #3D5C3C !important;
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    margin-top: 1rem !important;
+}
+
+/* ── 見出し ── */
+h1 { color: #2C3E35 !important; font-weight: 700 !important; letter-spacing: -0.5px !important; }
+h2, h3 { color: #3D5C3C !important; font-weight: 600 !important; }
+
+/* ── フォーム枠 ── */
+[data-testid="stForm"] {
+    background-color: #FFFFFF !important;
+    border: 1px solid #D4CFC4 !important;
+    border-radius: 14px !important;
+    padding: 1.5rem 1.5rem 1rem !important;
+    box-shadow: 0 2px 10px rgba(91,140,90,0.08) !important;
+}
+
+/* ── テキスト入力 ── */
+.stTextInput > div > div > input {
+    background-color: #FAFAF7 !important;
+    border: 1.5px solid #C8C3B8 !important;
+    border-radius: 8px !important;
+    color: #2C3E35 !important;
+    font-family: 'Noto Sans JP', sans-serif !important;
+}
+.stTextInput > div > div > input:focus {
+    border-color: #5B8C5A !important;
+    box-shadow: 0 0 0 3px rgba(91,140,90,0.15) !important;
+}
+
+/* ── 調査開始ボタン ── */
+.stFormSubmitButton > button {
+    background-color: #5B8C5A !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    font-size: 1rem !important;
+    letter-spacing: 0.5px !important;
+    padding: 0.6rem 2rem !important;
+    transition: background-color 0.2s ease !important;
+}
+.stFormSubmitButton > button:hover {
+    background-color: #4A7349 !important;
+}
+
+/* ── ダウンロードボタン ── */
+.stDownloadButton > button {
+    background-color: #F5F2EB !important;
+    color: #3D5C3C !important;
+    border: 2px solid #5B8C5A !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    transition: background-color 0.2s ease !important;
+}
+.stDownloadButton > button:hover {
+    background-color: #DFF0DE !important;
+}
+
+/* ── メトリクスカード ── */
+[data-testid="stMetric"] {
+    background-color: #FFFFFF !important;
+    border: 1px solid #D4CFC4 !important;
+    border-radius: 12px !important;
+    padding: 1rem 1.2rem !important;
+    box-shadow: 0 2px 8px rgba(91,140,90,0.08) !important;
+}
+[data-testid="stMetricLabel"] {
+    color: #7A9E79 !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+}
+[data-testid="stMetricValue"] {
+    color: #2C3E35 !important;
+    font-size: 1.1rem !important;
+    font-weight: 700 !important;
+}
+
+/* ── 区切り線 ── */
+hr { border-color: #D4CFC4 !important; }
+
+/* ── アラート・info ── */
+[data-testid="stAlert"] {
+    border-radius: 10px !important;
+    background-color: #F0EDE5 !important;
+    border-left-color: #5B8C5A !important;
+}
+
+/* ── ステータスボックス ── */
+[data-testid="stStatusWidget"] {
+    border-radius: 10px !important;
+    border: 1px solid #D4CFC4 !important;
+    background-color: #FAFAF7 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🌿 敷地法規調査ツール")
 st.caption("住所を入力するだけで、都市計画情報・建築基準法の主要制限をまとめたレポートを自動生成します。")
 
 # ─────────────────────────────────────────────
