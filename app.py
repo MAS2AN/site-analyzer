@@ -204,7 +204,10 @@ if submitted and address.strip():
 
             # Step 2-3: 都市計画情報の調査
             st.write("🗺️ 国土数値情報（用途地域・容積率・建ぺい率）を照合中...")
-            st.write("🔎 Web検索で防火規制等を補完中...")
+            if os.environ.get("GOOGLE_API_KEY"):
+                st.write("🤖 Gemini で Web参考情報を収集中...")
+            else:
+                st.write("🔎 DuckDuckGo で Web参考情報を補完中...")
             zone_info, search_results, gemini_raw = research(clean_address, geo["normalized"], geo)
 
             # Step 4: レポート生成
