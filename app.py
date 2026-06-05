@@ -23,7 +23,7 @@ from analyze_site import build_report, geocode, research
 # ─────────────────────────────────────────────
 st.set_page_config(
     page_title="敷地法規調査ツール",
-    page_icon="🌿",
+    page_icon="🏢",
     layout="wide",
 )
 
@@ -35,6 +35,31 @@ st.markdown("""
 html, body, .stApp {
     background-color: #F5F2EB !important;
     font-family: 'Noto Sans JP', sans-serif !important;
+    color: #2C3E35 !important;
+}
+
+/* ── 全テキスト要素に深いグリーンを強制 ── */
+p, span, div, label, li, td, th, caption,
+.stMarkdown, .stText, .stCaption,
+[data-testid="stMarkdownContainer"],
+[data-testid="stCaptionContainer"],
+[data-testid="stText"] {
+    color: #2C3E35 !important;
+}
+
+/* ── サイドバー内テキスト ── */
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] div,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] li {
+    color: #2C3E35 !important;
+}
+
+/* ── ステータス・スピナーテキスト ── */
+[data-testid="stStatusWidget"] span,
+[data-testid="stStatusWidget"] p,
+[data-testid="stStatusWidget"] div {
     color: #2C3E35 !important;
 }
 
@@ -143,7 +168,7 @@ hr { border-color: #D4CFC4 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🌿 敷地法規調査ツール")
+st.title("🏢 敷地法規調査ツール")
 st.caption("住所を入力するだけで、都市計画情報・建築基準法の主要制限をまとめたレポートを自動生成します。")
 
 # ─────────────────────────────────────────────
