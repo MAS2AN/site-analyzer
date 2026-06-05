@@ -271,6 +271,8 @@ def research_spatial(lat: float, lon: float, muni_code: str) -> dict:
         if needs_filter:
             features = [f for f in features if f.get("properties", {}).get("A29_001") == muni_code]
 
+    del geojson  # 全量GeoJSONをフィルタリング直後に解放
+
     print(f"         フィーチャ数: {len(features)}（{muni_code}）", file=sys.stderr)
 
     # フィーチャごとに形状をキャッシュ（最寄り検索でも使い回す）
