@@ -54,6 +54,10 @@ def _create_volume_3d(vol: dict) -> go.Figure:
         wy += [vy[p1], vy[p2], None]
         wz += [vz[p1], vz[p2], None]
 
+    # 寸法表示用オフセット
+    dim_off = max(site_w * 0.12, 1.0)
+    h_off   = max(site_w * 0.10, 0.8)
+
     traces = [
         # 敷地（グランドプレーン）
         go.Mesh3d(
@@ -76,6 +80,38 @@ def _create_volume_3d(vol: dict) -> go.Figure:
             mode="lines", line=dict(color="#2C3E35", width=2),
             name="建物輪郭", showlegend=False, hoverinfo="none",
         ),
+        # ── 寸法線：敷地幅（手前辺の外側）──
+        go.Scatter3d(
+            x=[0, site_w], y=[-dim_off, -dim_off], z=[0, 0],
+            mode="lines", line=dict(color="#8B7355", width=2, dash="dot"),
+            showlegend=False, hoverinfo="none",
+        ),
+        # 寸法線：高さ（右外側）
+        go.Scatter3d(
+            x=[x1 + h_off, x1 + h_off], y=[y0, y0], z=[0, h],
+            mode="lines", line=dict(color="#3D5C3C", width=2, dash="dot"),
+            showlegend=False, hoverinfo="none",
+        ),
+        # 寸法線：建物幅（手前辺の内側）
+        go.Scatter3d(
+            x=[x0, x1], y=[y0 - dim_off * 0.5, y0 - dim_off * 0.5], z=[0, 0],
+            mode="lines", line=dict(color="#5B8C5A", width=2, dash="dot"),
+            showlegend=False, hoverinfo="none",
+        ),
+        # ── 寸法テキスト ──
+        go.Scatter3d(
+            x=[site_w / 2,          x1 + h_off * 1.6,  x0 + bldg_w / 2],
+            y=[-dim_off * 1.3,      y0,                 y0 - dim_off * 0.6],
+            z=[0,                   h / 2,              0],
+            mode="text",
+            text=[
+                f"<b>敷地 {site_w:.1f}×{site_w:.1f} m</b>",
+                f"<b>H={h:.1f}m ({est_floors}F)</b>",
+                f"建物 {bldg_w:.1f}×{bldg_w:.1f} m",
+            ],
+            textfont=dict(color="#2C3E35", size=12),
+            showlegend=False, hoverinfo="none",
+        ),
     ]
 
     # 各階の水平ライン
@@ -93,19 +129,20 @@ def _create_volume_3d(vol: dict) -> go.Figure:
         scene=dict(
             xaxis=dict(showticklabels=False, title="", showgrid=False, zeroline=False),
             yaxis=dict(showticklabels=False, title="", showgrid=False, zeroline=False),
-            zaxis=dict(title="高さ (m)", ticksuffix="m"),
+            zaxis=dict(title="高さ (m)", ticksuffix="m", tickfont=dict(color="#2C3E35")),
             aspectmode="data",
             bgcolor="#F8F5EE",
             camera=dict(eye=dict(x=1.6, y=-1.6, z=0.9)),
         ),
         paper_bgcolor="#F5F2EB",
         margin=dict(l=0, r=0, t=10, b=0),
-        height=430,
+        height=450,
         legend=dict(
             x=0.01, y=0.98,
             bgcolor="rgba(245,242,235,0.85)",
             bordercolor="#D4CFC4",
             borderwidth=1,
+            font=dict(color="#2C3E35", size=12),
         ),
     )
     return fig
