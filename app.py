@@ -21,19 +21,21 @@ sys.path.insert(0, str(Path(__file__).parent))
 from analyze_site import build_report, geocode, research, volume_study
 
 
-def _create_volume_3d(vol: dict) -> go.Figure:
+def _create_volume_3d(vol: dict, site_w: float, site_d: float) -> go.Figure:
     """ボリューム検討結果を3Dボックスで可視化する。"""
-    site_area = vol["site_area"]
     max_building_area = vol["max_building_area"]
     est_height = vol["est_height"]
     est_floors = vol["est_floors"]
 
-    site_w = math.sqrt(site_area)
-    bldg_w = math.sqrt(max_building_area)
-    pad = max((site_w - bldg_w) / 2, 0)
+    # 建物の縦横寸法：敷地と同じアスペクト比を維持
+    ratio = site_w / site_d if site_d > 0 else 1.0
+    bldg_w = math.sqrt(max_building_area * ratio)
+    bldg_d = math.sqrt(max_building_area / ratio)
+    pad_x = max((site_w - bldg_w) / 2, 0)
+    pad_y = max((site_d - bldg_d) / 2, 0)
 
-    x0, x1 = pad, pad + bldg_w
-    y0, y1 = pad, pad + bldg_w
+    x0, x1 = pad_x, pad_x + bldg_w
+    y0, y1 = pad_y, pad_y + bldg_d
     h = est_height
 
     # 8頂点（底面4 + 上面4）
@@ -61,12 +63,12 @@ def _create_volume_3d(vol: dict) -> go.Figure:
     traces = [
         # 敷地（グランドプレーン）
         go.Mesh3d(
-            x=[0, site_w, site_w, 0], y=[0, 0, site_w, site_w], z=[0, 0, 0, 0],
+            x=[0, site_w, site_w, 0], y=[0, 0, site_d, site_d], z=[0, 0, 0, 0],
             color="#C8B99A", opacity=0.55, name="敷地", showlegend=True, hoverinfo="none",
         ),
         # 敷地境界線
         go.Scatter3d(
-            x=[0, site_w, site_w, 0, 0], y=[0, 0, site_w, site_w, 0], z=[0.05]*5,
+            x=[0, site_w, site_w, 0, 0], y=[0, 0, site_d, site_d, 0], z=[0.05]*5,
             mode="lines", line=dict(color="#8B7355", width=4), name="敷地境界",
         ),
         # 建物エンベロープ（半透明）
@@ -105,9 +107,9 @@ def _create_volume_3d(vol: dict) -> go.Figure:
             z=[0,                   h / 2,              0],
             mode="text",
             text=[
-                f"<b>敷地 {site_w:.1f}×{site_w:.1f} m</b>",
+                f"<b>敷地 {site_w:.1f}×{site_d:.1f} m</b>",
                 f"<b>H={h:.1f}m ({est_floors}F)</b>",
-                f"建物 {bldg_w:.1f}×{bldg_w:.1f} m",
+                f"建物 {bldg_w:.1f}×{bldg_d:.1f} m",
             ],
             textfont=dict(color="#2C3E35", size=12),
             showlegend=False, hoverinfo="none",
@@ -309,15 +311,21 @@ with st.form("search_form"):
         placeholder="例）東京都目黒区目黒2-1-1　または　〒292-0007 千葉県木更津市中島2627-1",
         help="番地まで入力するほど精度が上がります。郵便番号は無視されます。",
     )
-    col_site, col_road = st.columns(2)
-    with col_site:
-        site_area_input = st.number_input(
-            "敷地面積（㎡）— ボリューム検討に使用（任意）",
-            min_value=0.0, value=0.0, step=10.0, format="%.1f",
+    col_sw, col_sd, col_road = st.columns(3)
+    with col_sw:
+        site_w_input = st.number_input(
+            "敷地 幅（m）— 間口 ※任意",
+            min_value=0.0, value=0.0, step=0.5, format="%.1f",
+            help="前面道路側の寸法。入力するとボリューム検討が表示されます。",
+        )
+    with col_sd:
+        site_d_input = st.number_input(
+            "敷地 奥行（m）※任意",
+            min_value=0.0, value=0.0, step=0.5, format="%.1f",
         )
     with col_road:
         road_width_input = st.number_input(
-            "前面道路幅員（m）（任意）",
+            "前面道路幅員（m）※任意",
             min_value=0.0, value=0.0, step=0.5, format="%.1f",
         )
     submitted = st.form_submit_button("🔍 調査開始", use_container_width=True, type="primary")
@@ -390,8 +398,10 @@ if submitted and address.strip():
         # ─────────────────────────────────────────────
         # ボリューム検討
         # ─────────────────────────────────────────────
-        site_area = site_area_input if site_area_input > 0 else None
+        site_w = site_w_input if site_w_input > 0 else None
+        site_d = site_d_input if site_d_input > 0 else None
         road_width = road_width_input if road_width_input > 0 else None
+        site_area = (site_w * site_d) if (site_w and site_d) else None
 
         if site_area is not None:
             st.subheader("🏗️ ボリューム検討")
@@ -418,7 +428,8 @@ if submitted and address.strip():
 
                 # ── 計算内訳テーブル ──
                 rows = [
-                    ("敷地面積", f"{site_area:,.1f} ㎡", "入力値"),
+                    ("敷地寸法", f"{site_w:.1f} × {site_d:.1f} m", "入力値"),
+                    ("敷地面積", f"{site_area:,.1f} ㎡", f"{site_w:.1f} × {site_d:.1f}"),
                     ("建ぺい率", f"{vol['bcr_pct']:.0f}%", "取得値"),
                     ("最大建築面積", f"{vol['max_building_area']:,.1f} ㎡", "敷地面積 × 建ぺい率"),
                     ("指定容積率", f"{vol['far_pct']:.0f}%", "取得値"),
@@ -457,7 +468,7 @@ if submitted and address.strip():
 
                 # ── 3D可視化 ──
                 st.markdown("**📐 建物エンベロープ（3D）**")
-                fig = _create_volume_3d(vol)
+                fig = _create_volume_3d(vol, site_w, site_d)
                 st.plotly_chart(fig, use_container_width=True)
 
             st.divider()
