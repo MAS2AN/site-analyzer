@@ -3,10 +3,12 @@
 起動: python -m streamlit run app.py
 """
 
+import math
 import os
 import sys
 from pathlib import Path
 
+import plotly.graph_objects as go
 import streamlit as st
 
 # Streamlit Cloud の Secrets を環境変数に反映（ローカル実行時はスキップ）
@@ -16,7 +18,97 @@ for _key in ("REINFOLIB_API_KEY", "GOOGLE_API_KEY"):
 
 # analyze_site.py と同じフォルダにある関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
-from analyze_site import build_report, geocode, research
+from analyze_site import build_report, geocode, research, volume_study
+
+
+def _create_volume_3d(vol: dict) -> go.Figure:
+    """ボリューム検討結果を3Dボックスで可視化する。"""
+    site_area = vol["site_area"]
+    max_building_area = vol["max_building_area"]
+    est_height = vol["est_height"]
+    est_floors = vol["est_floors"]
+
+    site_w = math.sqrt(site_area)
+    bldg_w = math.sqrt(max_building_area)
+    pad = max((site_w - bldg_w) / 2, 0)
+
+    x0, x1 = pad, pad + bldg_w
+    y0, y1 = pad, pad + bldg_w
+    h = est_height
+
+    # 8頂点（底面4 + 上面4）
+    vx = [x0, x1, x1, x0, x0, x1, x1, x0]
+    vy = [y0, y0, y1, y1, y0, y0, y1, y1]
+    vz = [0,  0,  0,  0,  h,  h,  h,  h ]
+
+    # 12三角形（面インデックス）
+    fi = [0, 0, 4, 4, 0, 0, 2, 3, 1, 1, 0, 0]
+    fj = [1, 2, 5, 6, 5, 4, 6, 6, 5, 6, 3, 7]
+    fk = [2, 3, 6, 7, 1, 5, 3, 7, 6, 2, 7, 4]
+
+    # ワイヤーフレーム用エッジ（None区切り）
+    edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+    wx, wy, wz = [], [], []
+    for p1, p2 in edges:
+        wx += [vx[p1], vx[p2], None]
+        wy += [vy[p1], vy[p2], None]
+        wz += [vz[p1], vz[p2], None]
+
+    traces = [
+        # 敷地（グランドプレーン）
+        go.Mesh3d(
+            x=[0, site_w, site_w, 0], y=[0, 0, site_w, site_w], z=[0, 0, 0, 0],
+            color="#C8B99A", opacity=0.55, name="敷地", showlegend=True, hoverinfo="none",
+        ),
+        # 敷地境界線
+        go.Scatter3d(
+            x=[0, site_w, site_w, 0, 0], y=[0, 0, site_w, site_w, 0], z=[0.05]*5,
+            mode="lines", line=dict(color="#8B7355", width=4), name="敷地境界",
+        ),
+        # 建物エンベロープ（半透明）
+        go.Mesh3d(
+            x=vx, y=vy, z=vz, i=fi, j=fj, k=fk,
+            color="#5B8C5A", opacity=0.30, name="建物エンベロープ", showlegend=True, hoverinfo="none",
+        ),
+        # ワイヤーフレーム
+        go.Scatter3d(
+            x=wx, y=wy, z=wz,
+            mode="lines", line=dict(color="#2C3E35", width=2),
+            name="建物輪郭", showlegend=False, hoverinfo="none",
+        ),
+    ]
+
+    # 各階の水平ライン
+    floor_h = h / est_floors if est_floors > 0 else h
+    for f in range(1, min(est_floors, 30)):
+        fz = f * floor_h
+        traces.append(go.Scatter3d(
+            x=[x0, x1, x1, x0, x0], y=[y0, y0, y1, y1, y0], z=[fz]*5,
+            mode="lines", line=dict(color="#7FAF7E", width=1),
+            showlegend=False, hoverinfo="none",
+        ))
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(showticklabels=False, title="", showgrid=False, zeroline=False),
+            yaxis=dict(showticklabels=False, title="", showgrid=False, zeroline=False),
+            zaxis=dict(title="高さ (m)", ticksuffix="m"),
+            aspectmode="data",
+            bgcolor="#F8F5EE",
+            camera=dict(eye=dict(x=1.6, y=-1.6, z=0.9)),
+        ),
+        paper_bgcolor="#F5F2EB",
+        margin=dict(l=0, r=0, t=10, b=0),
+        height=430,
+        legend=dict(
+            x=0.01, y=0.98,
+            bgcolor="rgba(245,242,235,0.85)",
+            bordercolor="#D4CFC4",
+            borderwidth=1,
+        ),
+    )
+    return fig
 
 # ─────────────────────────────────────────────
 # ページ設定
@@ -180,6 +272,17 @@ with st.form("search_form"):
         placeholder="例）東京都目黒区目黒2-1-1　または　〒292-0007 千葉県木更津市中島2627-1",
         help="番地まで入力するほど精度が上がります。郵便番号は無視されます。",
     )
+    col_site, col_road = st.columns(2)
+    with col_site:
+        site_area_input = st.number_input(
+            "敷地面積（㎡）— ボリューム検討に使用（任意）",
+            min_value=0.0, value=0.0, step=10.0, format="%.1f",
+        )
+    with col_road:
+        road_width_input = st.number_input(
+            "前面道路幅員（m）（任意）",
+            min_value=0.0, value=0.0, step=0.5, format="%.1f",
+        )
     submitted = st.form_submit_button("🔍 調査開始", use_container_width=True, type="primary")
 
 # ─────────────────────────────────────────────
@@ -246,6 +349,81 @@ if submitted and address.strip():
         st.markdown(report_md)
 
         st.divider()
+
+        # ─────────────────────────────────────────────
+        # ボリューム検討
+        # ─────────────────────────────────────────────
+        site_area = site_area_input if site_area_input > 0 else None
+        road_width = road_width_input if road_width_input > 0 else None
+
+        if site_area is not None:
+            st.subheader("🏗️ ボリューム検討")
+            st.caption("※敷地を正方形で近似した概算値です。前面道路容積率は建基法第52条第2項による。")
+
+            vol = volume_study(zone_info, site_area, road_width)
+
+            if "error" in vol:
+                st.warning(vol["error"])
+            else:
+                # ── メトリクス ──
+                vc1, vc2, vc3, vc4 = st.columns(4)
+                with vc1:
+                    st.metric("最大建築面積", f"{vol['max_building_area']:,.1f} ㎡")
+                with vc2:
+                    far_label = f"{vol['effective_far_pct']:.0f}%"
+                    if vol.get("far_limited_by_road"):
+                        far_label += "（道路制限）"
+                    st.metric("有効容積率", far_label)
+                with vc3:
+                    st.metric("最大延べ床面積", f"{vol['max_total_area']:,.1f} ㎡")
+                with vc4:
+                    st.metric("概算最大階数", f"{vol['est_floors']} 階")
+
+                # ── 計算内訳テーブル ──
+                rows = [
+                    ("敷地面積", f"{site_area:,.1f} ㎡", "入力値"),
+                    ("建ぺい率", f"{vol['bcr_pct']:.0f}%", "取得値"),
+                    ("最大建築面積", f"{vol['max_building_area']:,.1f} ㎡", "敷地面積 × 建ぺい率"),
+                    ("指定容積率", f"{vol['far_pct']:.0f}%", "取得値"),
+                ]
+                if vol.get("road_far_pct") is not None:
+                    rows.append((
+                        "前面道路容積率",
+                        f"{vol['road_far_pct']:.0f}%",
+                        f"道路幅員 {road_width}m × {vol['road_multiplier']}",
+                    ))
+                rows += [
+                    ("有効容積率", f"{vol['effective_far_pct']:.0f}%",
+                     "指定容積率・前面道路容積率の小さい方"),
+                    ("最大延べ床面積", f"{vol['max_total_area']:,.1f} ㎡", "敷地面積 × 有効容積率"),
+                    ("概算最大高さ", f"{vol['est_height']} m", f"階数 × {vol['floor_height']}m/階"),
+                    ("概算最大階数", f"{vol['est_floors']} 階", "最大延べ床 ÷ 最大建築面積（切り上げ）"),
+                ]
+                if "abs_height_limit" in vol:
+                    rows.append(("絶対高さ制限 ⚠️", vol["abs_height_limit"], vol["abs_height_limited_floors"]))
+
+                import pandas as pd
+                df = pd.DataFrame(rows, columns=["項目", "値", "計算根拠"])
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+                if vol.get("far_limited_by_road"):
+                    st.warning(
+                        f"前面道路幅員 {road_width}m による容積率制限（{vol['road_far_pct']:.0f}%）が"
+                        f"指定容積率（{vol['far_pct']:.0f}%）より厳しいため、有効容積率は "
+                        f"**{vol['effective_far_pct']:.0f}%** になります。"
+                    )
+                if "abs_height_limit" in vol:
+                    st.warning(
+                        f"この用途地域（{vol['zone_name']}）には絶対高さ制限があります。"
+                        f"最大 {vol['abs_height_limit']} — 概算階数は {vol['abs_height_limited_floors']} 程度になります。"
+                    )
+
+                # ── 3D可視化 ──
+                st.markdown("**📐 建物エンベロープ（3D）**")
+                fig = _create_volume_3d(vol)
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.divider()
 
         # ─────────────────────────────────────────────
         # ダウンロードボタン

@@ -758,6 +758,97 @@ def research(address: str, normalized: str, geo: dict) -> tuple[dict, list[dict]
 
 
 # ---------------------------------------------------------------------------
+# ボリューム検討
+# ---------------------------------------------------------------------------
+
+# 前面道路容積率の乗数: 住居系=4/10、その他=6/10（建基法第52条第2項）
+_RESIDENTIAL_ZONES_FOR_FAR = {
+    "第一種低層住居専用地域", "第二種低層住居専用地域", "田園住居地域",
+    "第一種中高層住居専用地域", "第二種中高層住居専用地域",
+    "第一種住居地域", "第二種住居地域", "準住居地域",
+}
+
+# 絶対高さ制限がある用途地域（建基法第55条）
+_ABS_HEIGHT_ZONES = {
+    "第一種低層住居専用地域", "第二種低層住居専用地域", "田園住居地域",
+}
+
+
+def _parse_percent(s) -> float | None:
+    """'200%' → 200.0, None/未取得 → None"""
+    if not s:
+        return None
+    m = re.search(r'(\d+(?:\.\d+)?)', str(s))
+    return float(m.group(1)) if m else None
+
+
+def volume_study(zone_info: dict, site_area: float, road_width: float | None) -> dict:
+    """
+    敷地面積・前面道路幅員からボリューム検討を行う。
+
+    Returns:
+        dict: 計算結果。'error' キーがあれば計算不能を示す。
+    """
+    import math as _math
+
+    bcr_pct = _parse_percent(zone_info.get("建蔽率"))
+    far_pct = _parse_percent(zone_info.get("容積率"))
+    zone_name = zone_info.get("用途地域", "")
+
+    if bcr_pct is None:
+        return {"error": "建ぺい率が取得できていません。先に住所調査を行ってください。"}
+    if far_pct is None:
+        return {"error": "容積率が取得できていません。先に住所調査を行ってください。"}
+
+    result: dict = {
+        "site_area": site_area,
+        "zone_name": zone_name,
+        "bcr_pct": bcr_pct,
+        "far_pct": far_pct,
+    }
+
+    # ── 最大建築面積 ──
+    max_building_area = site_area * bcr_pct / 100
+    result["max_building_area"] = round(max_building_area, 1)
+
+    # ── 前面道路による容積率制限（建基法第52条第2項）──
+    if road_width is not None and road_width > 0:
+        is_residential = zone_name in _RESIDENTIAL_ZONES_FOR_FAR
+        multiplier = 0.4 if is_residential else 0.6
+        road_far_pct = road_width * multiplier * 100
+        result["road_far_pct"] = round(road_far_pct, 0)
+        result["road_multiplier"] = "4/10（住居系）" if is_residential else "6/10（その他）"
+        result["far_limited_by_road"] = road_far_pct < far_pct
+        effective_far_pct = min(far_pct, road_far_pct)
+    else:
+        result["road_far_pct"] = None
+        result["far_limited_by_road"] = False
+        effective_far_pct = far_pct
+
+    result["effective_far_pct"] = round(effective_far_pct, 0)
+
+    # ── 最大延べ床面積 ──
+    max_total_area = site_area * effective_far_pct / 100
+    result["max_total_area"] = round(max_total_area, 1)
+
+    # ── 概算階数・最大高さ（階高 3.5m 想定）──
+    FLOOR_HEIGHT = 3.5
+    est_floors = _math.ceil(max_total_area / max_building_area) if max_building_area > 0 else 1
+    result["est_floors"] = est_floors
+    result["est_height"] = round(est_floors * FLOOR_HEIGHT, 1)
+    result["floor_height"] = FLOOR_HEIGHT
+
+    # ── 絶対高さ制限（低層住居専用地域・建基法第55条）──
+    if zone_name in _ABS_HEIGHT_ZONES:
+        result["abs_height_limit"] = "10m または 12m（都市計画による）"
+        result["abs_height_limited_floors"] = (
+            f"{_math.floor(10 / FLOOR_HEIGHT)}〜{_math.floor(12 / FLOOR_HEIGHT)}階"
+        )
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Step 4: 法令サマリー生成（建基法知識データベース使用）
 # ---------------------------------------------------------------------------
 
