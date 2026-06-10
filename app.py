@@ -532,8 +532,11 @@ with st.sidebar:
 - 防火規制・高度地区・条例は Web 検索からの補完情報のため、必ず行政窓口で確認してください
 """)
 
-    st.header("🔑 精度向上（任意）")
-    st.markdown("""
+    st.header("🔑 Gemini AI")
+    if os.environ.get("GOOGLE_API_KEY"):
+        st.success("✅ Gemini API 設定済み\nWeb参考情報の精度が向上しています。")
+    else:
+        st.markdown("""
 `GOOGLE_API_KEY` を設定すると、防火規制・高度地区の
 取得精度が向上します。
 
