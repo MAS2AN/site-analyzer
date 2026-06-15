@@ -3,12 +3,10 @@
 起動: python -m streamlit run app.py
 """
 
-import math
 import os
 import sys
 from pathlib import Path
 
-import plotly.graph_objects as go
 import streamlit as st
 
 # Streamlit Cloud の Secrets を環境変数に反映（ローカル実行時はスキップ）
@@ -20,134 +18,6 @@ for _key in ("REINFOLIB_API_KEY", "GOOGLE_API_KEY"):
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze_site import build_report, geocode, research, volume_study
 
-
-def _create_volume_3d(vol: dict, site_w: float, site_d: float) -> go.Figure:
-    """ボリューム検討結果を3Dボックスで可視化する。"""
-    max_building_area = vol["max_building_area"]
-    est_height = vol["est_height"]
-    est_floors = vol["est_floors"]
-
-    # 建物の縦横寸法：敷地と同じアスペクト比を維持
-    ratio = site_w / site_d if site_d > 0 else 1.0
-    bldg_w = math.sqrt(max_building_area * ratio)
-    bldg_d = math.sqrt(max_building_area / ratio)
-    pad_x = max((site_w - bldg_w) / 2, 0)
-    pad_y = max((site_d - bldg_d) / 2, 0)
-
-    x0, x1 = pad_x, pad_x + bldg_w
-    y0, y1 = pad_y, pad_y + bldg_d
-    h = est_height
-
-    # 8頂点（底面4 + 上面4）
-    vx = [x0, x1, x1, x0, x0, x1, x1, x0]
-    vy = [y0, y0, y1, y1, y0, y0, y1, y1]
-    vz = [0,  0,  0,  0,  h,  h,  h,  h ]
-
-    # 12三角形（面インデックス）
-    fi = [0, 0, 4, 4, 0, 0, 2, 3, 1, 1, 0, 0]
-    fj = [1, 2, 5, 6, 5, 4, 6, 6, 5, 6, 3, 7]
-    fk = [2, 3, 6, 7, 1, 5, 3, 7, 6, 2, 7, 4]
-
-    # ワイヤーフレーム用エッジ（None区切り）
-    edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
-    wx, wy, wz = [], [], []
-    for p1, p2 in edges:
-        wx += [vx[p1], vx[p2], None]
-        wy += [vy[p1], vy[p2], None]
-        wz += [vz[p1], vz[p2], None]
-
-    # 寸法表示用オフセット
-    dim_off = max(site_w * 0.12, 1.0)
-    h_off   = max(site_w * 0.10, 0.8)
-
-    traces = [
-        # 敷地（グランドプレーン）
-        go.Mesh3d(
-            x=[0, site_w, site_w, 0], y=[0, 0, site_d, site_d], z=[0, 0, 0, 0],
-            color="#C8B99A", opacity=0.55, name="敷地", showlegend=True, hoverinfo="none",
-        ),
-        # 敷地境界線
-        go.Scatter3d(
-            x=[0, site_w, site_w, 0, 0], y=[0, 0, site_d, site_d, 0], z=[0.05]*5,
-            mode="lines", line=dict(color="#8B7355", width=4), name="敷地境界",
-        ),
-        # 建物エンベロープ（半透明）
-        go.Mesh3d(
-            x=vx, y=vy, z=vz, i=fi, j=fj, k=fk,
-            color="#5B8C5A", opacity=0.30, name="建物エンベロープ", showlegend=True, hoverinfo="none",
-        ),
-        # ワイヤーフレーム
-        go.Scatter3d(
-            x=wx, y=wy, z=wz,
-            mode="lines", line=dict(color="#2C3E35", width=2),
-            name="建物輪郭", showlegend=False, hoverinfo="none",
-        ),
-        # ── 寸法線：敷地幅（手前辺の外側）──
-        go.Scatter3d(
-            x=[0, site_w], y=[-dim_off, -dim_off], z=[0, 0],
-            mode="lines", line=dict(color="#8B7355", width=2, dash="dot"),
-            showlegend=False, hoverinfo="none",
-        ),
-        # 寸法線：高さ（右外側）
-        go.Scatter3d(
-            x=[x1 + h_off, x1 + h_off], y=[y0, y0], z=[0, h],
-            mode="lines", line=dict(color="#3D5C3C", width=2, dash="dot"),
-            showlegend=False, hoverinfo="none",
-        ),
-        # 寸法線：建物幅（手前辺の内側）
-        go.Scatter3d(
-            x=[x0, x1], y=[y0 - dim_off * 0.5, y0 - dim_off * 0.5], z=[0, 0],
-            mode="lines", line=dict(color="#5B8C5A", width=2, dash="dot"),
-            showlegend=False, hoverinfo="none",
-        ),
-        # ── 寸法テキスト ──
-        go.Scatter3d(
-            x=[site_w / 2,          x1 + h_off * 1.6,  x0 + bldg_w / 2],
-            y=[-dim_off * 1.3,      y0,                 y0 - dim_off * 0.6],
-            z=[0,                   h / 2,              0],
-            mode="text",
-            text=[
-                f"<b>敷地 {site_w:.1f}×{site_d:.1f} m</b>",
-                f"<b>H={h:.1f}m ({est_floors}F)</b>",
-                f"建物 {bldg_w:.1f}×{bldg_d:.1f} m",
-            ],
-            textfont=dict(color="#2C3E35", size=12),
-            showlegend=False, hoverinfo="none",
-        ),
-    ]
-
-    # 各階の水平ライン
-    floor_h = h / est_floors if est_floors > 0 else h
-    for f in range(1, min(est_floors, 30)):
-        fz = f * floor_h
-        traces.append(go.Scatter3d(
-            x=[x0, x1, x1, x0, x0], y=[y0, y0, y1, y1, y0], z=[fz]*5,
-            mode="lines", line=dict(color="#7FAF7E", width=1),
-            showlegend=False, hoverinfo="none",
-        ))
-
-    fig = go.Figure(data=traces)
-    fig.update_layout(
-        scene=dict(
-            xaxis=dict(showticklabels=False, title="", showgrid=False, zeroline=False),
-            yaxis=dict(showticklabels=False, title="", showgrid=False, zeroline=False),
-            zaxis=dict(title="高さ (m)", ticksuffix="m", tickfont=dict(color="#2C3E35")),
-            aspectmode="data",
-            bgcolor="#F8F5EE",
-            camera=dict(eye=dict(x=1.6, y=-1.6, z=0.9)),
-        ),
-        paper_bgcolor="#F5F2EB",
-        margin=dict(l=0, r=0, t=10, b=0),
-        height=450,
-        legend=dict(
-            x=0.01, y=0.98,
-            bgcolor="rgba(245,242,235,0.85)",
-            bordercolor="#D4CFC4",
-            borderwidth=1,
-            font=dict(color="#2C3E35", size=12),
-        ),
-    )
-    return fig
 
 # ─────────────────────────────────────────────
 # ページ設定
@@ -388,6 +258,75 @@ if submitted and address.strip():
         st.divider()
 
         # ─────────────────────────────────────────────
+        # 都市計画 GIS マップ（folium）
+        # ─────────────────────────────────────────────
+        try:
+            import folium
+            from streamlit_folium import st_folium
+            from analyze_site import ZONE_COLORS
+
+            st.subheader("🗺️ 都市計画 GIS マップ")
+
+            data_src = zone_info.get("_data_source", "A29")
+            if data_src == "XKT002":
+                st.caption("用途地域ポリゴン: reinfolib XKT002（令和6年度データ） / ベースマップ: 地理院タイル")
+            else:
+                st.caption("ベースマップ: 地理院タイル　※ reinfolib APIキー未設定のためポリゴン表示なし")
+
+            m = folium.Map(
+                location=[geo["lat"], geo["lon"]],
+                zoom_start=16,
+                tiles="https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png",
+                attr='<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>',
+            )
+
+            # 用途地域ポリゴン（XKT002 から取得した GeoJSON features）
+            map_features = zone_info.get("_map_features", [])
+            if map_features:
+                zone_group = folium.FeatureGroup(name="用途地域", show=True)
+                for feat in map_features:
+                    props = feat.get("properties", {})
+                    zname = props.get("use_area_ja", "")
+                    bcr   = props.get("u_building_coverage_ratio_ja", "")
+                    far   = props.get("u_floor_area_ratio_ja", "")
+                    color = ZONE_COLORS.get(zname, "#BBBBBB")
+                    tip   = f"{zname}　建ぺい率 {bcr}　容積率 {far}" if zname else ""
+                    try:
+                        folium.GeoJson(
+                            feat,
+                            style_function=lambda x, c=color: {
+                                "fillColor": c,
+                                "color": "#444444",
+                                "weight": 0.8,
+                                "fillOpacity": 0.45,
+                            },
+                            tooltip=folium.Tooltip(tip, sticky=False),
+                        ).add_to(zone_group)
+                    except Exception:
+                        pass
+                zone_group.add_to(m)
+
+            # 敷地マーカー
+            folium.Marker(
+                [geo["lat"], geo["lon"]],
+                popup=folium.Popup(clean_address, max_width=250),
+                icon=folium.Icon(color="red", icon="home", prefix="glyphicon"),
+                tooltip="調査敷地",
+            ).add_to(m)
+
+            folium.LayerControl().add_to(m)
+            st_folium(m, use_container_width=True, height=450, returned_objects=[])
+
+        except ImportError:
+            st.info(
+                "地図表示には `folium` と `streamlit-folium` が必要です。"
+                "`pip install folium streamlit-folium` を実行してください。",
+                icon="ℹ️",
+            )
+
+        st.divider()
+
+        # ─────────────────────────────────────────────
         # レポート本文（Markdown 表示）
         # ─────────────────────────────────────────────
         st.subheader("📋 詳細レポート")
@@ -466,11 +405,6 @@ if submitted and address.strip():
                         f"最大 {vol['abs_height_limit']} — 概算階数は {vol['abs_height_limited_floors']} 程度になります。"
                     )
 
-                # ── 3D可視化 ──
-                st.markdown("**📐 建物エンベロープ（3D）**")
-                fig = _create_volume_3d(vol, site_w, site_d)
-                st.plotly_chart(fig, use_container_width=True)
-
             st.divider()
 
         # ─────────────────────────────────────────────
@@ -527,9 +461,17 @@ with st.sidebar:
 
 ---
 
+**📡 データソース**
+- 用途地域 → **XKT002（令和6年度）**
+- 防火規制 → XKT014 / 地区計画 → XKT023
+- 高度利用地区 → XKT024 ← NEW
+- APIキー未設定時 → A29（2019年）フォールバック
+
+---
+
 **⚠️ 注意事項**
-- 用途地域・容積率・建ぺい率は **国土数値情報（国土交通省）** から取得した公式データです
-- 防火規制・高度地区・条例は Web 検索からの補完情報のため、必ず行政窓口で確認してください
+- 高度地区・日影規制数値は自動取得不可（✕）
+- 確認申請・設計判断は必ず行政窓口で確認
 """)
 
     st.header("🔑 Gemini AI")

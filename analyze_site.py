@@ -61,6 +61,23 @@ A29_YOTO_CODES = {
     21: "田園住居地域",
 }
 
+# 用途地域別 標準色（GISマップ表示用 - 都市計画の標準配色に準拠）
+ZONE_COLORS: dict[str, str] = {
+    "第一種低層住居専用地域":   "#8DC353",
+    "第二種低層住居専用地域":   "#C3D93E",
+    "田園住居地域":             "#D7D739",
+    "第一種中高層住居専用地域": "#73B2E0",
+    "第二種中高層住居専用地域": "#5585C8",
+    "第一種住居地域":           "#FFF100",
+    "第二種住居地域":           "#F7C900",
+    "準住居地域":               "#F5A622",
+    "近隣商業地域":             "#F5842C",
+    "商業地域":                 "#E83838",
+    "準工業地域":               "#C890CC",
+    "工業地域":                 "#AB88CA",
+    "工業専用地域":             "#8070BA",
+}
+
 
 # ---------------------------------------------------------------------------
 # 用途地域ごとの建基法制限データベース
@@ -355,6 +372,50 @@ def _reinfolib_tile(endpoint: str, lat: float, lon: float, api_key: str, zoom: i
     return matches
 
 
+def _reinfolib_tile_raw(endpoint: str, lat: float, lon: float, api_key: str, zoom: int = 15) -> list[dict]:
+    """reinfolib API からタイル内の全フィーチャをジオメトリ込みで返す（マップ表示用）。"""
+    x, y = _lat_lon_to_tile(lat, lon, zoom)
+    headers = {"Ocp-Apim-Subscription-Key": api_key}
+    params = {"response_format": "geojson", "z": zoom, "x": x, "y": y}
+    resp = requests.get(f"{REINFOLIB_BASE}/{endpoint}", headers=headers, params=params, timeout=15)
+    resp.raise_for_status()
+    return resp.json().get("features", [])
+
+
+def research_reinfolib_xkt002(lat: float, lon: float, api_key: str) -> tuple[dict, list[dict]]:
+    """
+    XKT002 API（都市計画決定GISデータ・令和6年度）で用途地域・建ぺい率・容積率を取得する。
+    Returns: (zone_info_dict, all_tile_features_for_map)
+    """
+    try:
+        from shapely.geometry import Point, shape
+    except ImportError:
+        return {}, []
+
+    features = _reinfolib_tile_raw("XKT002", lat, lon, api_key, zoom=15)
+    point = Point(lon, lat)
+    result: dict = {}
+
+    for feat in features:
+        try:
+            if shape(feat["geometry"]).covers(point):
+                props = feat.get("properties", {})
+                zone_name = props.get("use_area_ja", "")
+                bcr = props.get("u_building_coverage_ratio_ja", "")
+                far = props.get("u_floor_area_ratio_ja", "")
+                if zone_name:
+                    result["用途地域"] = str(zone_name)
+                if bcr:
+                    result["建蔽率"] = str(bcr)
+                if far:
+                    result["容積率"] = str(far)
+                break
+        except Exception:
+            continue
+
+    return result, features
+
+
 def research_reinfolib(lat: float, lon: float, api_key: str) -> dict:
     """
     不動産情報ライブラリ API（国交省公式）で防火規制・区域区分を取得する。
@@ -423,6 +484,28 @@ def research_reinfolib(lat: float, lon: float, api_key: str) -> dict:
             print("         [reinfolib] XKT023: 地区計画の指定なし", file=sys.stderr)
     except Exception as e:
         print(f"         ⚠️ reinfolib XKT023 失敗: {e}", file=sys.stderr)
+
+    # XKT024: 高度利用地区
+    try:
+        feats = _reinfolib_tile("XKT024", lat, lon, api_key)
+        if feats:
+            props = feats[0]
+            name = (
+                props.get("high_use_district_ja")
+                or props.get("name_ja")
+                or props.get("name")
+                or next(
+                    (v for v in props.values() if isinstance(v, str) and len(v) > 2),
+                    "指定あり（名称取得不可）",
+                )
+            )
+            result["高度利用地区"] = str(name)
+            print(f"         [reinfolib] 高度利用地区: {name}", file=sys.stderr)
+        else:
+            result["高度利用地区"] = "なし"
+            print("         [reinfolib] XKT024: 高度利用地区の指定なし", file=sys.stderr)
+    except Exception as e:
+        print(f"         ⚠️ reinfolib XKT024 失敗: {e}", file=sys.stderr)
 
     return result
 
@@ -605,12 +688,15 @@ def research_gemini(address: str, normalized: str, api_key: str) -> tuple[dict, 
 備考: （確認すべき条例・制限など）
 """
 
-    response = client.models.generate_content(
-        model="gemini-flash-latest",
-        contents=prompt,
-    )
-
-    raw_text = response.text or ""
+    try:
+        response = client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=prompt,
+        )
+        raw_text = response.text or ""
+    except Exception as _api_err:
+        print(f"      Gemini generate_content エラー: {_api_err}", file=sys.stderr)
+        raw_text = f"※ Gemini API エラーのため解析スキップ（{_api_err}）"
 
     # Step C: Geminiの回答を構造化
     zone_info: dict = {}
@@ -677,44 +763,75 @@ def research(address: str, normalized: str, geo: dict) -> tuple[dict, list[dict]
     """
     ── 情報ソースの優先順位 ──
     一次情報（公式・✅）:
-      1. 国土数値情報 A29    → 用途地域・容積率・建ぺい率
-      2. reinfolib API       → 防火規制・区域区分（REINFOLIB_API_KEY 必須）
+      1. XKT002 API          → 用途地域・容積率・建ぺい率（令和6年度・REINFOLIB_API_KEY 必須）
+         ↳ フォールバック: 国土数値情報 A29（2019年・APIキー不要）
+      2. reinfolib API       → 防火規制(XKT014)・区域区分(XKT001)・地区計画(XKT023)・高度利用地区(XKT024)
     二次情報（参考のみ・メインテーブルに反映しない）:
       3. Gemini / DuckDuckGo → 高度地区・条例等の参考情報
+    戻り値の merged に _map_features（foliumマップ用GeoJSONフィーチャ列）を含む。
     """
     lat, lon = geo["lat"], geo["lon"]
     muni_code = geo.get("muniCode", "")
     primary_keys: set[str] = set()
     merged: dict = {}
 
-    # ── 一次情報 1: 国土数値情報 A29（用途地域・容積率・建ぺい率）──
-    spatial_info: dict = {}
-    if muni_code:
-        print("      [1/3] 国土数値情報 A29 空間クエリ...", file=sys.stderr)
-        spatial_info = research_spatial(lat, lon, muni_code)
-
-    outside_zone = spatial_info.get("_outside_zone", False)
-    if outside_zone:
-        merged["_outside_zone"] = True
-    else:
-        for k, v in spatial_info.items():
-            if not k.startswith("_") and v:
-                merged[k] = v
-                primary_keys.add(k)
-        # A29 でゾーンが確定 → 市街化区域も確定（論理的導出）
-        if "用途地域" in primary_keys:
-            merged["区域区分"] = "市街化区域"
-            primary_keys.add("区域区分")
-        if merged.get("用途地域"):
-            print(
-                f"         → 用途地域: {merged['用途地域']} / "
-                f"容積率: {merged.get('容積率', '不明')} / "
-                f"建ぺい率: {merged.get('建蔽率', '不明')}",
-                file=sys.stderr,
-            )
-
-    # ── 一次情報 2: reinfolib API（防火規制・区域区分）──
+    # ── 一次情報 1: XKT002 API（用途地域・令和6年度）> A29 フォールバック ──
+    map_features: list[dict] = []
+    outside_zone = False
     reinfolib_key = os.environ.get("REINFOLIB_API_KEY", "")
+    xkt002_ok = False
+
+    if reinfolib_key:
+        print("      [1/3] XKT002 API（用途地域・令和6年度データ）...", file=sys.stderr)
+        try:
+            xkt002_info, map_features = research_reinfolib_xkt002(lat, lon, reinfolib_key)
+            if xkt002_info.get("用途地域"):
+                for k, v in xkt002_info.items():
+                    merged[k] = v
+                    primary_keys.add(k)
+                merged["区域区分"] = "市街化区域"
+                primary_keys.add("区域区分")
+                merged["_data_source"] = "XKT002"
+                xkt002_ok = True
+                print(
+                    f"         → 用途地域: {merged['用途地域']} / "
+                    f"容積率: {merged.get('容積率', '不明')} / "
+                    f"建ぺい率: {merged.get('建蔽率', '不明')}",
+                    file=sys.stderr,
+                )
+            else:
+                print("         → XKT002: 用途地域ポリゴン外（A29にフォールバック）", file=sys.stderr)
+        except Exception as e:
+            print(f"         ⚠️ XKT002 失敗: {e}（A29にフォールバック）", file=sys.stderr)
+
+    if not xkt002_ok:
+        spatial_info: dict = {}
+        if muni_code:
+            label = "A29フォールバック" if reinfolib_key else "国土数値情報 A29 空間クエリ"
+            print(f"      [1/3] {label}（2019年データ）...", file=sys.stderr)
+            spatial_info = research_spatial(lat, lon, muni_code)
+
+        outside_zone = spatial_info.get("_outside_zone", False)
+        if outside_zone:
+            merged["_outside_zone"] = True
+        else:
+            for k, v in spatial_info.items():
+                if not k.startswith("_") and v:
+                    merged[k] = v
+                    primary_keys.add(k)
+            if "用途地域" in primary_keys:
+                merged["区域区分"] = "市街化区域"
+                primary_keys.add("区域区分")
+            merged["_data_source"] = "A29"
+            if merged.get("用途地域"):
+                print(
+                    f"         → 用途地域: {merged['用途地域']} / "
+                    f"容積率: {merged.get('容積率', '不明')} / "
+                    f"建ぺい率: {merged.get('建蔽率', '不明')}",
+                    file=sys.stderr,
+                )
+
+    # ── 一次情報 2: reinfolib API（防火規制・区域区分・地区計画・高度利用地区）──
     if reinfolib_key:
         print("      [2/3] reinfolib API（防火規制・区域区分）...", file=sys.stderr)
         try:
@@ -745,7 +862,16 @@ def research(address: str, normalized: str, geo: dict) -> tuple[dict, list[dict]
     google_key = os.environ.get("GOOGLE_API_KEY", "")
     if google_key:
         print("      [3/3] Gemini で Web参考情報を収集中...", file=sys.stderr)
-        web_info, search_results, gemini_raw = research_gemini(address, normalized, google_key)
+        try:
+            web_info, search_results, gemini_raw = research_gemini(address, normalized, google_key)
+        except Exception as _gemini_err:
+            # 503 等の一時エラーは DuckDuckGo にフォールバック
+            print(
+                f"      [3/3] Gemini エラー（{_gemini_err}）→ DuckDuckGo にフォールバック",
+                file=sys.stderr,
+            )
+            web_info, search_results, gemini_raw = research_ddgs(address, normalized)
+            gemini_raw = f"※ Gemini が一時的に利用不可のため DuckDuckGo に切り替えました（{_gemini_err}）\n\n" + gemini_raw
     else:
         print("      [3/3] DuckDuckGo で Web参考情報を収集中...", file=sys.stderr)
         web_info, search_results, gemini_raw = research_ddgs(address, normalized)
@@ -753,6 +879,7 @@ def research(address: str, normalized: str, geo: dict) -> tuple[dict, list[dict]
     # Web情報はメインデータに混入させず「_web_ref」に格納（レポートの参考欄に表示）
     merged["_web_ref"] = {k: v for k, v in web_info.items() if not k.startswith("_")}
     merged["_spatial_keys"] = primary_keys
+    merged["_map_features"] = map_features  # XKT002 GeoJSON features（foliumマップ用）
 
     return merged, search_results, gemini_raw
 
@@ -968,8 +1095,9 @@ def build_report(address: str, geo: dict, zone_info: dict, search_results: list,
             kubun = zone_info.get("区域区分", None)
 
     # 防火規制: reinfolib確定値なら✅、法22条推定なら⚠️、未取得なら✕
-    fire   = zone_info.get("防火規制", None)
-    height = zone_info.get("高度地区", None)
+    fire         = zone_info.get("防火規制", None)
+    height       = zone_info.get("高度地区", None)
+    koudo_riyou  = zone_info.get("高度利用地区", None)
     fire_inferred = zone_info.get("_fire_inferred", False)
     if fire_inferred and "防火規制" in spatial_keys:
         spatial_keys = spatial_keys - {"防火規制"}  # 推定値は✅にしない
@@ -1015,6 +1143,13 @@ def build_report(address: str, geo: dict, zone_info: dict, search_results: list,
     m = re.search(r'((?:東京都|.{2,4}[都道府県]).{2,10}[市区町村])', norm)
     jichitai = m.group(1) if m else norm[:8]
 
+    data_source = zone_info.get("_data_source", "A29")
+    src_label = (
+        "XKT002・reinfolib（令和6年度）"
+        if data_source == "XKT002"
+        else "国土数値情報 A29（2019年）+ Web補完"
+    )
+
     return f"""# 敷地法規調査レポート
 
 | | |
@@ -1023,10 +1158,11 @@ def build_report(address: str, geo: dict, zone_info: dict, search_results: list,
 | **正規化住所** | {norm} |
 | **座標** | 緯度 {geo['lat']:.6f} / 経度 {geo['lon']:.6f} |
 | **調査日** | {today} |
+| **データソース** | {src_label} |
 
 ---
 
-## 1. 都市計画情報（国土数値情報 A29 + Web補完）
+## 1. 都市計画情報（{src_label}）
 
 | 項目 | 取得値 | 信頼度 |
 |------|--------|--------|
@@ -1036,10 +1172,11 @@ def build_report(address: str, geo: dict, zone_info: dict, search_results: list,
 | 指定建ぺい率 | {cov or na} | {_st('建蔽率', cov)} |
 | 防火規制 | {fire or na} | {_st('防火規制', fire)} |
 | 高度地区 | {height or na} | {_st('高度地区', height)} |
+| 高度利用地区 | {koudo_riyou or na} | {_st('高度利用地区', koudo_riyou)} |
 | 日影規制（数値） | {na} | ✕ |
 | 地区計画 | {zone_info.get('地区計画', na)} | {_st('地区計画', zone_info.get('地区計画'))} |
 
-> **凡例** ✅ = 一次情報（国土数値情報・reinfolib公式）　⚠️ = Web参考（要確認）　✕ = 未取得 → **⚠️・✕ は必ず行政窓口 / 都市計画GISで確認してください**
+> **凡例** ✅ = 一次情報（{src_label}）　⚠️ = Web参考（要確認）　✕ = 未取得 → **⚠️・✕ は必ず行政窓口 / 都市計画GISで確認してください**
 
 ---
 
