@@ -6,9 +6,11 @@
 import math
 import os
 import sys
+import uuid
 from pathlib import Path
 
 import plotly.graph_objects as go
+import requests as _req
 import streamlit as st
 
 # Streamlit Cloud の Secrets を環境変数に反映（ローカル実行時はスキップ）
@@ -158,18 +160,32 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── Google Analytics 4（Secrets に GA_MEASUREMENT_ID があるときのみ有効）──
-_ga_id = st.secrets.get("GA_MEASUREMENT_ID", "")
-if _ga_id:
-    st.html(f"""
-<script async src="https://www.googletagmanager.com/gtag/js?id={_ga_id}"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){{dataLayer.push(arguments);}}
-  gtag('js', new Date());
-  gtag('config', '{_ga_id}');
-</script>
-""")
+# ── Google Analytics 4 サーバーサイド（Measurement Protocol）──
+def _ga4_event(event_name: str, params: dict | None = None) -> None:
+    """GA4 Measurement Protocol でイベントを送信する。失敗しても無視。"""
+    ga_id = st.secrets.get("GA_MEASUREMENT_ID", "")
+    ga_secret = st.secrets.get("GA_API_SECRET", "")
+    if not ga_id or not ga_secret:
+        return
+    if "ga_client_id" not in st.session_state:
+        st.session_state.ga_client_id = str(uuid.uuid4())
+    try:
+        _req.post(
+            "https://www.google-analytics.com/mp/collect",
+            params={"measurement_id": ga_id, "api_secret": ga_secret},
+            json={
+                "client_id": st.session_state.ga_client_id,
+                "events": [{"name": event_name, "params": params or {}}],
+            },
+            timeout=2,
+        )
+    except Exception:
+        pass
+
+# セッション開始時に1回だけ page_view を送信
+if "ga_page_viewed" not in st.session_state:
+    st.session_state.ga_page_viewed = True
+    _ga4_event("page_view")
 
 st.markdown("""
 <style>
@@ -347,6 +363,7 @@ with st.form("search_form"):
 # 実行・結果表示
 # ─────────────────────────────────────────────
 if submitted and address.strip():
+    _ga4_event("search")
     # 郵便番号部分（〒xxx-xxxx）を除去
     import re
     clean_address = re.sub(r"[〒\s]*\d{3}-\d{4}\s*", "", address).strip()
