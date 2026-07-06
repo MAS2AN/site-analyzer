@@ -158,6 +158,19 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── Google Analytics 4（Secrets に GA_MEASUREMENT_ID があるときのみ有効）──
+_ga_id = st.secrets.get("GA_MEASUREMENT_ID", "")
+if _ga_id:
+    st.html(f"""
+<script async src="https://www.googletagmanager.com/gtag/js?id={_ga_id}"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){{dataLayer.push(arguments);}}
+  gtag('js', new Date());
+  gtag('config', '{_ga_id}');
+</script>
+""")
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap');
