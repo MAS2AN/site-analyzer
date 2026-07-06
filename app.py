@@ -166,11 +166,12 @@ def _ga4_event(event_name: str, params: dict | None = None) -> None:
     ga_id = st.secrets.get("GA_MEASUREMENT_ID", "")
     ga_secret = st.secrets.get("GA_API_SECRET", "")
     if not ga_id or not ga_secret:
+        print(f"[GA4-DEBUG] Secrets missing: ga_id={bool(ga_id)}, ga_secret={bool(ga_secret)}")
         return
     if "ga_client_id" not in st.session_state:
         st.session_state.ga_client_id = str(uuid.uuid4())
     try:
-        _req.post(
+        resp = _req.post(
             "https://www.google-analytics.com/mp/collect",
             params={"measurement_id": ga_id, "api_secret": ga_secret},
             json={
@@ -179,8 +180,9 @@ def _ga4_event(event_name: str, params: dict | None = None) -> None:
             },
             timeout=2,
         )
-    except Exception:
-        pass
+        print(f"[GA4-DEBUG] {event_name} → status={resp.status_code}, body={resp.text[:200]}")
+    except Exception as e:
+        print(f"[GA4-DEBUG] Error: {e}")
 
 # セッション開始時に1回だけ page_view を送信
 if "ga_page_viewed" not in st.session_state:
