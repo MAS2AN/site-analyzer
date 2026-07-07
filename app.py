@@ -34,6 +34,13 @@ _ROAD_BEARINGS = {
     "南東": 135, "南西": 225, "北東": 45, "北西": 315,
 }
 
+# 3×3 コンパスグリッド定義 [表示ラベル, 度数]、None=中央（敷地）
+_COMPASS_GRID = [
+    [("↖ 北西", 315), ("↑ 北",  0),   ("↗ 北東",  45)],
+    [("← 西",   270), None,            ("→ 東",    90)],
+    [("↙ 南西", 225), ("↓ 南",  180),  ("↘ 南東", 135)],
+]
+
 
 def _create_volume_3d(vol: dict, site_w: float, site_d: float) -> go.Figure:
     """ボリューム検討結果を3Dボックスで可視化する。"""
@@ -344,6 +351,52 @@ st.title("🏢 敷地法規調査ツール")
 st.caption("住所を入力するだけで、都市計画情報・建築基準法の主要制限をまとめたレポートを自動生成します。")
 
 # ─────────────────────────────────────────────
+# 前面道路の方角コンパス（フォーム外・session_state で保持）
+# ─────────────────────────────────────────────
+if "road_bearing_deg" not in st.session_state:
+    st.session_state.road_bearing_deg   = 180
+    st.session_state.road_bearing_label = "南"
+
+with st.container():
+    st.markdown("**🧭 前面道路の方角**（クリックで選択）")
+    st.caption("道路が敷地のどの方角にあるか選択してください")
+    _comp_cols_rows = [st.columns([1, 1, 1, 0.05, 2]) for _ in range(3)]
+    for ri, row in enumerate(_COMPASS_GRID):
+        for ci, cell in enumerate(row):
+            with _comp_cols_rows[ri][ci]:
+                if cell is None:
+                    st.markdown(
+                        "<div style='text-align:center;line-height:2.4rem;font-size:1.3rem'>🏢</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    label, deg = cell
+                    is_sel = st.session_state.road_bearing_deg == deg
+                    if st.button(
+                        label,
+                        key=f"brg_{deg}",
+                        use_container_width=True,
+                        type="primary" if is_sel else "secondary",
+                    ):
+                        st.session_state.road_bearing_deg   = deg
+                        st.session_state.road_bearing_label = label.split()[-1]
+                        st.rerun()
+        # 右側に説明を中央行のみ表示
+        if ri == 1:
+            with _comp_cols_rows[1][4]:
+                sel_lbl = st.session_state.road_bearing_label
+                sel_deg = st.session_state.road_bearing_deg
+                st.markdown(
+                    f"<div style='padding:4px 8px;background:#DFF0DE;border-radius:8px;"
+                    f"border:1px solid #5B8C5A;font-size:0.9rem'>"
+                    f"✅ <b>{sel_lbl}側</b> に前面道路<br>"
+                    f"<span style='color:#666;font-size:0.8rem'>({sel_deg}°)</span></div>",
+                    unsafe_allow_html=True,
+                )
+
+st.markdown("")  # spacing
+
+# ─────────────────────────────────────────────
 # 入力フォーム
 # ─────────────────────────────────────────────
 with st.form("search_form"):
@@ -369,14 +422,7 @@ with st.form("search_form"):
             "前面道路幅員（m）※任意",
             min_value=0.0, value=0.0, step=0.5, format="%.1f",
         )
-    col_bearing, col_meas_h, col_shadow_t = st.columns(3)
-    with col_bearing:
-        road_bearing_input = st.selectbox(
-            "前面道路の方角（日影・斜線用）",
-            options=list(_ROAD_BEARINGS.keys()),
-            index=0,
-            help="前面道路が敷地のどの方角にあるか。南向き（北面道路）が日影に最も不利です。",
-        )
+    col_meas_h, col_shadow_t = st.columns(2)
     with col_meas_h:
         meas_h_input = st.selectbox(
             "日影測定面高さ",
@@ -532,7 +578,7 @@ if submitted and address.strip():
                 st.markdown("**📐 建物エンベロープ・日影・斜線制限（3D）**")
                 fig = _create_volume_3d(vol, site_w, site_d)
 
-                bearing_deg = _ROAD_BEARINGS.get(road_bearing_input, 180)
+                bearing_deg = st.session_state.get("road_bearing_deg", 180)
                 meas_h_m    = float(meas_h_input.split()[0])
                 thresh_h    = int(shadow_thresh_input.split()[0])
                 zone_name_v = zone_info.get("用途地域", "")
