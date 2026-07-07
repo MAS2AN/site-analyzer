@@ -21,6 +21,18 @@ for _key in ("REINFOLIB_API_KEY", "GOOGLE_API_KEY"):
 # analyze_site.py と同じフォルダにある関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze_site import build_report, geocode, research, volume_study
+from shadow_calc import (
+    calc_shadows, suggest_height_solar, calc_height_limits,
+    road_setback_traces, north_setback_traces,
+)
+
+_ROAD_BEARINGS = {
+    "南（道路が南側・建物が南向き）": 180,
+    "北（道路が北側）": 0,
+    "東（道路が東側）": 90,
+    "西（道路が西側）": 270,
+    "南東": 135, "南西": 225, "北東": 45, "北西": 315,
+}
 
 
 def _create_volume_3d(vol: dict, site_w: float, site_d: float) -> go.Figure:
@@ -357,6 +369,26 @@ with st.form("search_form"):
             "前面道路幅員（m）※任意",
             min_value=0.0, value=0.0, step=0.5, format="%.1f",
         )
+    col_bearing, col_meas_h, col_shadow_t = st.columns(3)
+    with col_bearing:
+        road_bearing_input = st.selectbox(
+            "前面道路の方角（日影・斜線用）",
+            options=list(_ROAD_BEARINGS.keys()),
+            index=0,
+            help="前面道路が敷地のどの方角にあるか。南向き（北面道路）が日影に最も不利です。",
+        )
+    with col_meas_h:
+        meas_h_input = st.selectbox(
+            "日影測定面高さ",
+            options=["1.5 m（低層住専等）", "4.0 m（その他住居系）", "6.5 m（商業系）"],
+            index=0,
+        )
+    with col_shadow_t:
+        shadow_thresh_input = st.selectbox(
+            "日影規制 時間数",
+            options=["3 時間", "4 時間", "5 時間"],
+            index=1,
+        )
     submitted = st.form_submit_button("🔍 調査開始", use_container_width=True, type="primary")
 
 # ─────────────────────────────────────────────
@@ -496,10 +528,92 @@ if submitted and address.strip():
                         f"最大 {vol['abs_height_limit']} — 概算階数は {vol['abs_height_limited_floors']} 程度になります。"
                     )
 
-                # ── 3D可視化 ──
-                st.markdown("**📐 建物エンベロープ（3D）**")
+                # ── 3D可視化（ボリューム＋日影＋斜線）──
+                st.markdown("**📐 建物エンベロープ・日影・斜線制限（3D）**")
                 fig = _create_volume_3d(vol, site_w, site_d)
+
+                bearing_deg = _ROAD_BEARINGS.get(road_bearing_input, 180)
+                meas_h_m    = float(meas_h_input.split()[0])
+                thresh_h    = int(shadow_thresh_input.split()[0])
+                zone_name_v = zone_info.get("用途地域", "")
+                road_w      = road_width or 6.0
+
+                ratio    = site_w / site_d if site_d > 0 else 1.0
+                bldg_w_c = math.sqrt(vol["max_building_area"] * ratio)
+                bldg_d_c = math.sqrt(vol["max_building_area"] / ratio)
+                px0      = max((site_w - bldg_w_c) / 2, 0)
+                py0      = max((site_d - bldg_d_c) / 2, 0)
+                bldg_fp  = [
+                    (px0, py0), (px0 + bldg_w_c, py0),
+                    (px0 + bldg_w_c, py0 + bldg_d_c), (px0, py0 + bldg_d_c),
+                ]
+
+                for t in road_setback_traces(road_w, site_w, site_d, zone_name_v):
+                    fig.add_trace(t)
+                for t in north_setback_traces(bearing_deg, site_w, site_d, zone_name_v):
+                    fig.add_trace(t)
+                shadow_res = calc_shadows(
+                    bldg_fp, vol["est_height"], meas_h_m,
+                    geo["lat"], geo["lon"], bearing_deg, thresh_h, site_w, site_d,
+                )
+                for t in shadow_res["traces"]:
+                    fig.add_trace(t)
+
+                st.caption(
+                    f"冬至日 / 測定高 {meas_h_m}m / {thresh_h}時間日影 "
+                    "│ 🟠 敷地内日影  🔴 敷地外逸脱  🟡 道路斜線エンベロープ  🟢 北側斜線エンベロープ"
+                )
                 st.plotly_chart(fig, use_container_width=True)
+
+                # ── 日影判定 ──
+                if shadow_res["violation"]:
+                    st.error(
+                        f"⚠️ **日影規制オーバー**: H={vol['est_height']:.0f}m では "
+                        f"{thresh_h}時間日影が敷地外へ **{shadow_res['violation_area_m2']:.0f}㎡** 逸脱します。"
+                    )
+                    sug_h = suggest_height_solar(
+                        bldg_fp, vol["est_height"], meas_h_m,
+                        geo["lat"], geo["lon"], bearing_deg, thresh_h, site_w, site_d,
+                    )
+                    if sug_h > 0:
+                        st.info(f"💡 **縮小案: H ≤ {sug_h:.1f}m** なら敷地内に収まります（バイナリサーチ概算）")
+                    else:
+                        st.warning("H=1m でも日影が逸脱するため、用途地域・建物位置の再検討が必要です。")
+                else:
+                    st.success(
+                        f"✅ **日影OK**: {thresh_h}時間日影は敷地内に収まります "
+                        f"（等時間日影面積 {shadow_res['iso_area_m2']:.0f}㎡）"
+                    )
+
+                # ── 斜線制限チェック ──
+                limits = calc_height_limits(
+                    zone_name_v, road_w, site_w, site_d, bldg_w_c, bldg_d_c, bearing_deg,
+                )
+                if limits:
+                    lim_rows = []
+                    if limits.get("road_limit_h") is not None:
+                        ok = vol["est_height"] <= limits["road_limit_h"]
+                        lim_rows.append((
+                            "道路斜線", f"勾配 {limits['road_slope']}",
+                            f"{limits['road_setback_m']:.1f}m 後退",
+                            f"{limits['road_limit_h']:.1f}m",
+                            "✅ 適合" if ok else "⚠️ 超過",
+                        ))
+                    if limits.get("north_limit_h") is not None:
+                        ok = vol["est_height"] <= limits["north_limit_h"]
+                        lim_rows.append((
+                            "北側斜線", f"A={limits['north_rise']}m",
+                            f"北端まで {limits['dist_to_north_m']:.1f}m",
+                            f"{limits['north_limit_h']:.1f}m",
+                            "✅ 適合" if ok else "⚠️ 超過",
+                        ))
+                    if lim_rows:
+                        st.markdown("**📏 斜線制限チェック**")
+                        df_lim = pd.DataFrame(
+                            lim_rows,
+                            columns=["制限種別", "勾配・A値", "距離", "制限高さ", "適合判定"],
+                        )
+                        st.dataframe(df_lim, use_container_width=True, hide_index=True)
 
             st.divider()
 
