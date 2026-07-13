@@ -456,25 +456,61 @@ def geocode(address: str) -> dict:
 
     # ── 2nd: Nominatim (OSM) フォールバック ──
     if lat is None:
-        try:
-            nom_url = "https://nominatim.openstreetmap.org/search"
-            nom_resp = requests.get(
-                nom_url,
-                params={"q": address_norm, "format": "json", "countrycodes": "jp", "limit": 1},
-                headers={"User-Agent": "urban-gis-viewer/1.0"},
-                timeout=15,
+        nom_url = "https://nominatim.openstreetmap.org/search"
+        nom_hdrs = {"User-Agent": "urban-gis-viewer/1.0", "Accept-Language": "ja"}
+        nom_data = []
+
+        def _nom_get(params):
+            try:
+                r = requests.get(nom_url, params={**params, "format": "json",
+                                  "countrycodes": "jp", "limit": 1},
+                                 headers=nom_hdrs, timeout=15)
+                r.raise_for_status()
+                return r.json()
+            except Exception:
+                return []
+
+        def _split_jp(addr):
+            m1 = re.match(r"^(.*?[都道府県])", addr)
+            if not m1:
+                return None
+            pref = m1.group(1)
+            rest = addr[m1.end():]
+            m2 = re.match(r"^(.*?[市区町村郡])", rest)
+            if not m2:
+                return pref, "", rest
+            city = m2.group(1)
+            street_raw = rest[m2.end():]
+            street = re.sub(r"(\d+)丁目(\d+)-(\d+)", r"\1-\2-\3", street_raw)
+            street = re.sub(r"(\d+)丁目", r"\1-", street).rstrip("-")
+            return pref, city, street
+
+        parts = _split_jp(address_norm)
+
+        if parts:
+            pref, city, street = parts
+            if street:
+                nom_data = _nom_get({"state": pref, "city": city, "street": street})
+            if not nom_data and city:
+                nom_data = _nom_get({"state": pref, "city": city})
+
+        if not nom_data:
+            q2 = re.sub(r"(\d+)丁目(\d+)-(\d+)", r"\1-\2-\3", address_norm)
+            nom_data = _nom_get({"q": q2})
+
+        if not nom_data and parts:
+            pref, city, _ = parts
+            nom_data = _nom_get({"q": pref + city})
+
+        if not nom_data:
+            raise ValueError(
+                f"住所が見つかりません: {address_norm}\n"
+                "（国土地理院が一時停止中のため代替検索も精度が低下しています。"
+                "しばらく後で再試行してください）"
             )
-            nom_resp.raise_for_status()
-            nom_data = nom_resp.json()
-            if not nom_data:
-                raise ValueError(f"住所が見つかりません: {address_norm}")
-            lat = float(nom_data[0]["lat"])
-            lon = float(nom_data[0]["lon"])
-            normalized = nom_data[0].get("display_name", address)
-        except ValueError:
-            raise
-        except Exception as e:
-            raise ValueError(f"ジオコーディング失敗（国土地理院・OSM ともに応答なし）: {address_norm}") from e
+        lat = float(nom_data[0]["lat"])
+        lon = float(nom_data[0]["lon"])
+        normalized = nom_data[0].get("display_name", address)
 
     # ── 逆ジオコーダーで市区町村コードを取得 ──
     if not muni_code:
