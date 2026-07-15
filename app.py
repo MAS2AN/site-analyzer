@@ -25,6 +25,7 @@ from shadow_calc import (
     calc_shadows, suggest_height_solar, calc_height_limits,
     road_setback_traces, north_setback_traces,
 )
+from svg_plan import generate_plans, PRESET_ROOMS
 
 _ROAD_BEARINGS = {
     "南（道路が南側・建物が南向き）": 180,
@@ -660,6 +661,48 @@ if submitted and address.strip():
                             columns=["制限種別", "勾配・A値", "距離", "制限高さ", "適合判定"],
                         )
                         st.dataframe(df_lim, use_container_width=True, hide_index=True)
+
+                # ── 平面検討図（医療施設計画論準拠）──
+                st.markdown("---")
+                st.markdown("**🏥 平面検討図（医療施設計画論準拠）**")
+                st.caption(
+                    "Notes on Hospital Building（工学院大学 医療・福祉建築研究会）のCLに基づく"
+                    "ダブルロード廊下型の概略平面図。各室にカーソルを合わせるとCL設計チェックポイントが表示されます。"
+                )
+
+                preset_choice = st.selectbox(
+                    "プリセット諸室を選択",
+                    ["（空欄 / 手入力）"] + list(PRESET_ROOMS.keys()),
+                    key=f"preset_{floor_num if False else 'vol'}",
+                )
+                default_text = PRESET_ROOMS.get(preset_choice, "")
+                rooms_input = st.text_area(
+                    "諸室リスト（1行1室：室名 面積㎡）",
+                    value=default_text,
+                    height=180,
+                    help="# から始まる行はコメントとして無視されます。",
+                    key="rooms_input_vol",
+                )
+
+                if st.button("📐 平面検討図を生成", key="gen_plan_vol"):
+                    if rooms_input.strip():
+                        svgs = generate_plans(
+                            rooms_input,
+                            vol["max_building_area"],
+                            vol["est_floors"],
+                            site_w,
+                            site_d,
+                            clean_address,
+                        )
+                        if svgs:
+                            for i, svg in enumerate(svgs, 1):
+                                st.markdown(f"**{i}F**")
+                                import streamlit.components.v1 as components
+                                components.html(svg, height=500, scrolling=True)
+                        else:
+                            st.warning("諸室リストを正しい形式で入力してください（例: 診察室 15）")
+                    else:
+                        st.info("諸室リストを入力するか、プリセットを選択してください。")
 
             st.divider()
 
