@@ -21,10 +21,7 @@ for _key in ("REINFOLIB_API_KEY", "GOOGLE_API_KEY"):
 # analyze_site.py と同じフォルダにある関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze_site import build_report, geocode, research, volume_study
-from shadow_calc import (
-    calc_shadows, suggest_height_solar, calc_height_limits,
-    road_setback_traces, north_setback_traces,
-)
+from shadow_calc import calc_shadows
 from svg_plan import generate_plans, PRESET_ROOMS
 
 _ROAD_BEARINGS = {
@@ -576,15 +573,12 @@ if submitted and address.strip():
                     )
 
                 # ── 3D可視化（ボリューム＋日影＋斜線）──
-                st.markdown("**📐 建物エンベロープ・日影・斜線制限（3D）**")
+                st.markdown("**📐 建物ボリューム・日影シミュレーション（3D）**")
                 fig = _create_volume_3d(vol, site_w, site_d)
 
                 bearing_deg = st.session_state.get("road_bearing_deg", 180)
                 meas_h_m    = float(meas_h_input.split()[0])
                 thresh_h    = int(shadow_thresh_input.split()[0])
-                zone_name_v = zone_info.get("用途地域", "")
-                road_w      = road_width or 6.0
-
                 ratio    = site_w / site_d if site_d > 0 else 1.0
                 bldg_w_c = math.sqrt(vol["max_building_area"] * ratio)
                 bldg_d_c = math.sqrt(vol["max_building_area"] / ratio)
@@ -595,10 +589,6 @@ if submitted and address.strip():
                     (px0 + bldg_w_c, py0 + bldg_d_c), (px0, py0 + bldg_d_c),
                 ]
 
-                for t in road_setback_traces(road_w, site_w, site_d, zone_name_v):
-                    fig.add_trace(t)
-                for t in north_setback_traces(bearing_deg, site_w, site_d, zone_name_v):
-                    fig.add_trace(t)
                 shadow_res = calc_shadows(
                     bldg_fp, vol["est_height"], meas_h_m,
                     geo["lat"], geo["lon"], bearing_deg, thresh_h, site_w, site_d,
@@ -608,59 +598,9 @@ if submitted and address.strip():
 
                 st.caption(
                     f"冬至日 / 測定高 {meas_h_m}m / {thresh_h}時間日影 "
-                    "│ 🟠 敷地内日影  🔴 敷地外逸脱  🟡 道路斜線エンベロープ  🟢 北側斜線エンベロープ"
+                    "│ 🟠 敷地内日影  🔴 敷地外逸脱"
                 )
                 st.plotly_chart(fig, use_container_width=True)
-
-                # ── 日影判定 ──
-                if shadow_res["violation"]:
-                    st.error(
-                        f"⚠️ **日影規制オーバー**: H={vol['est_height']:.0f}m では "
-                        f"{thresh_h}時間日影が敷地外へ **{shadow_res['violation_area_m2']:.0f}㎡** 逸脱します。"
-                    )
-                    sug_h = suggest_height_solar(
-                        bldg_fp, vol["est_height"], meas_h_m,
-                        geo["lat"], geo["lon"], bearing_deg, thresh_h, site_w, site_d,
-                    )
-                    if sug_h > 0:
-                        st.info(f"💡 **縮小案: H ≤ {sug_h:.1f}m** なら敷地内に収まります（バイナリサーチ概算）")
-                    else:
-                        st.warning("H=1m でも日影が逸脱するため、用途地域・建物位置の再検討が必要です。")
-                else:
-                    st.success(
-                        f"✅ **日影OK**: {thresh_h}時間日影は敷地内に収まります "
-                        f"（等時間日影面積 {shadow_res['iso_area_m2']:.0f}㎡）"
-                    )
-
-                # ── 斜線制限チェック ──
-                limits = calc_height_limits(
-                    zone_name_v, road_w, site_w, site_d, bldg_w_c, bldg_d_c, bearing_deg,
-                )
-                if limits:
-                    lim_rows = []
-                    if limits.get("road_limit_h") is not None:
-                        ok = vol["est_height"] <= limits["road_limit_h"]
-                        lim_rows.append((
-                            "道路斜線", f"勾配 {limits['road_slope']}",
-                            f"{limits['road_setback_m']:.1f}m 後退",
-                            f"{limits['road_limit_h']:.1f}m",
-                            "✅ 適合" if ok else "⚠️ 超過",
-                        ))
-                    if limits.get("north_limit_h") is not None:
-                        ok = vol["est_height"] <= limits["north_limit_h"]
-                        lim_rows.append((
-                            "北側斜線", f"A={limits['north_rise']}m",
-                            f"北端まで {limits['dist_to_north_m']:.1f}m",
-                            f"{limits['north_limit_h']:.1f}m",
-                            "✅ 適合" if ok else "⚠️ 超過",
-                        ))
-                    if lim_rows:
-                        st.markdown("**📏 斜線制限チェック**")
-                        df_lim = pd.DataFrame(
-                            lim_rows,
-                            columns=["制限種別", "勾配・A値", "距離", "制限高さ", "適合判定"],
-                        )
-                        st.dataframe(df_lim, use_container_width=True, hide_index=True)
 
                 # ── 平面検討図（医療施設計画論準拠）──
                 st.markdown("---")
